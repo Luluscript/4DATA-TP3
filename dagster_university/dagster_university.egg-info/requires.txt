@@ -1,0 +1,11 @@
+dagster==1.10.*
+dagster-cloud
+dagster-duckdb
+geopandas
+pandas
+matplotlib
+shapely
+
+[dev]
+dagster-webserver
+pytest

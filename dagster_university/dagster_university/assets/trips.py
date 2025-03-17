@@ -3,16 +3,37 @@ from . import constants
 from pathlib import Path
 import duckdb
 import os
-from dagster import asset
 from dagster._utils.backoff import backoff
+from dagster_duckdb import DuckDBResource
+from ..partitions import monthly_partition
+from dagster import asset, AssetExecutionContext
 
 
-def taxi_trips_file() -> None:
+# def taxi_trips_file() -> None:
+#     """
+#     Récupère les fichiers Parquet bruts des trajets en taxi.
+#     Sourced from the NYC Open Data portal.
+#     """
+#     month_to_fetch = '2023-03'
+#     raw_trips = requests.get(
+#         f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{month_to_fetch}.parquet"
+#     )
+
+#     with open(constants.TAXI_TRIPS_TEMPLATE_FILE_PATH.format(month_to_fetch), "wb") as output_file:
+#         output_file.write(raw_trips.content)
+
+
+
+
+@asset(
+    partitions_def=monthly_partition
+)
+def taxi_trips_file(context: AssetExecutionContext) -> None:
     """
     Récupère les fichiers Parquet bruts des trajets en taxi.
-    Sourced from the NYC Open Data portal.
     """
-    month_to_fetch = '2023-03'
+    partition_date_str = context.partition_key
+    month_to_fetch = partition_date_str[:-3]
     raw_trips = requests.get(
         f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{month_to_fetch}.parquet"
     )
@@ -22,22 +43,6 @@ def taxi_trips_file() -> None:
 
 
 
-
-@asset
-def taxi_trips_file() -> None:
-    """
-    Récupère les fichiers Parquet bruts des trajets en taxi.
-    """
-    month_to_fetch = '2023-03'
-    raw_trips = requests.get(
-        f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{month_to_fetch}.parquet"
-    )
-
-    with open(constants.TAXI_TRIPS_TEMPLATE_FILE_PATH.format(month_to_fetch), "wb") as output_file:
-        output_file.write(raw_trips.content)
-
-
-# 📌 Création de l'asset taxi_zones_file
 @asset
 def taxi_zones_file() -> None:
     """Télécharge les données des zones de taxi et les enregistre en CSV."""
@@ -49,47 +54,41 @@ def taxi_zones_file() -> None:
 
 
 
-
 @asset(
-deps=["taxi_trips_file"]
+    deps=["taxi_trips_file"],
+    partitions_def=monthly_partition
 )
-def taxi_trips() -> None:
-    """
-    Le jeu de données brut des trajets en taxi, chargé dans une base de données DuckDB.
-    """
-    query = """
-        CREATE OR REPLACE TABLE trips AS (
-          SELECT
-            VendorID AS vendor_id,
-            PULocationID AS pickup_zone_id,
-            DOLocationID AS dropoff_zone_id,
-            RatecodeID AS rate_code_id,
-            payment_type AS payment_type,
-            tpep_dropoff_datetime AS dropoff_datetime,
-            tpep_pickup_datetime AS pickup_datetime,
-            trip_distance AS trip_distance,
-            passenger_count AS passenger_count,
-            total_amount AS total_amount
-          FROM 'data/raw/taxi_trips_2023-03.parquet'
-        );
+def taxi_trips(database: DuckDBResource, context: AssetExecutionContext) -> None:
+    partition_date_str = context.partition_key
+    month_to_fetch = partition_date_str[:-3]
+
+    query = f"""
+    create or replace table taxi_trips as
+    select S
+        VendorID as vendor_id,
+        PULocationID as pickup_zone_id,
+        DOLocationID as dropoff_zone_id,
+        RatecodeID as rate_code_id,
+        payment_type as payment_type,
+        tpep_dropoff_datetime as dropoff_datetime,
+        tpep_pickup_datetime as pickup_datetime,
+        trip_distance as trip_distance,
+        passenger_count as passenger_count,
+        total_amount as total_amount,
+        '{partition_date_str}' as partition_date  -- Ajout de la colonne partition_date
+    from 'data/raw/taxi_trips_{month_to_fetch}.parquet'
     """
 
-    conn = backoff(
-        fn=duckdb.connect,
-        retry_on=(RuntimeError, duckdb.IOException),
-        kwargs={
-            "database": os.getenv("DUCKDB_DATABASE"),
-        },
-        max_retries=10,
-    )
-    conn.execute(query)
+    with database.get_connection() as conn:
+        conn.execute(query)
+
 
 
 
 @asset(
 deps=["taxi_zones_file"]
 )
-def taxi_zones() -> None:
+def taxi_zones(database: DuckDBResource) -> None:
     """
     Le jeu de données brut des zones en taxi, chargé dans une base de données DuckDB.
     """
@@ -104,12 +103,5 @@ def taxi_zones() -> None:
         );
     """
 
-    conn = backoff(
-        fn=duckdb.connect,
-        retry_on=(RuntimeError, duckdb.IOException),
-        kwargs={
-            "database": os.getenv("DUCKDB_DATABASE"),
-        },
-        max_retries=10,
-    )
-    conn.execute(query)
+    with database.get_connection() as conn:
+        conn.execute(query)

@@ -6,13 +6,14 @@ import os
 from . import constants
 from dagster._utils.backoff import backoff
 import pandas as pd
+from dagster_duckdb import DuckDBResource
 
 
 
 @asset(
     deps=["taxi_trips", "taxi_zones"]
 )
-def manhattan_stats() -> None:
+def manhattan_stats(database: DuckDBResource) -> None:
     """
     Calcule les statistiques des trajets en taxi pour Manhattan et les stocke au format GeoJSON.
     """
@@ -28,8 +29,8 @@ def manhattan_stats() -> None:
         GROUP BY zone, borough, geometry
     """
 
-    conn = duckdb.connect(os.getenv("DUCKDB_DATABASE"))
-    trips_by_zone = conn.execute(query).fetch_df()
+    with database.get_connection() as conn:
+        trips_by_zone = conn.execute(query).fetch_df()
 
     trips_by_zone["geometry"] = gpd.GeoSeries.from_wkt(trips_by_zone["geometry"])
     trips_by_zone = gpd.GeoDataFrame(trips_by_zone)
@@ -62,7 +63,7 @@ def manhattan_map() -> None:
 
 # Création de l'asset trips_by_week
 @asset(deps=["taxi_trips"])
-def trips_by_week():
+def trips_by_week(database: DuckDBResource) -> None:
     """Agrège les trajets par semaine et stocke les résultats dans un fichier CSV."""
 
     # Requête pour agréger les trajets par semaine
@@ -78,17 +79,9 @@ def trips_by_week():
         GROUP BY 1
         ORDER BY 1;
     """
-    conn = backoff(
-        fn=duckdb.connect,
-        retry_on=(RuntimeError, duckdb.IOException),
-        kwargs={
-            "database": os.getenv("DUCKDB_DATABASE"),
-        },
-        max_retries=10,
-    )
-
+    with database.get_connection() as conn:
     # Exécuter la requête et récupérer le DataFrame
-    trips_weekly = conn.execute(query).fetch_df()
+        trips_weekly = conn.execute(query).fetch_df()
 
     # Conversion de la colonne 'period' en format string (dimanche de la semaine)
     trips_weekly["period"] = pd.to_datetime(trips_weekly["period"]).dt.strftime("%Y-%m-%d")

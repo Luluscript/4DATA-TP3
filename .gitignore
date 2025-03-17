@@ -1,2 +1,6 @@
 venv
 *.db
+*.duckdb
+*.parquet
+.tmp_dagster_home_6xfshnwi
+.tmp_dagster_home_deq81r3j
